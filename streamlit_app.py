@@ -25,7 +25,7 @@ from sirbaa_pipeline import (  # noqa: E402
 )
 
 st.set_page_config(page_title="SIRBAA Sensores", layout="wide")
-st.title("SIRBAA Sensores — TFM MVP")
+st.title("SIRBAA Sensores — TFM v1")
 st.caption("Carga lances y sensores, detecta encabezados raros y calcula TFM por intervalo.")
 
 if "analysis" not in st.session_state:
@@ -909,4 +909,4 @@ if st.session_state.analysis:
     )
 
 st.divider()
-st.caption("Tip: si el CSV trae una leyenda arriba, esta app intenta ubicar el header real antes de leerlo.")
+st.caption("RedesyRaices/Sirbaa - 2026")
