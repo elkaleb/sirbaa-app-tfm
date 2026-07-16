@@ -19,6 +19,8 @@ La app está pensada como herramienta de apoyo para auditoría: no reemplaza el 
 - Limpieza de columnas técnicas del logger.
 - Cálculo de TFM y estadísticos por lance observado usando intervalo configurable (`hr_fincal` → `hr_inicob` por defecto; `Hora_2` → `Hora_3` en formato alterno).
 - Detección de lances candidatos desde temperatura con K-Means.
+- Zoom/pan en la gráfica para revisar tramos específicos.
+- Validación manual de segmentos ML (`sí es lance`, `no es lance`, `dudoso`).
 - Superposición visual de lances observados vs segmentos ML.
 - Sugerencias explicables para revisar posibles falsos lances.
 - Reporte integrado descargable: `reporte_lances_tfm_ml.csv`.
@@ -32,6 +34,7 @@ src/sirbaa_pipeline/time_match.py # Lectura, limpieza y cruce temporal
 src/sirbaa_pipeline/lance_ml.py   # Detección ML y métricas de segmentos
 docs/UI-Y-EVALUACION.md          # Guía de uso y metodología
 docs/ACTUALIZACION-2026-07-16-NORMALIZACION.md
+docs/ACTUALIZACION-2026-07-16-ZOOM-VALIDACION.md
 docs/ROADMAP-ENTRENAMIENTO-Y-PRESETS.md
 requirements.txt
 ```
@@ -85,6 +88,7 @@ Referencias base:
 
 - [UI y evaluación](docs/UI-Y-EVALUACION.md)
 - [Actualización 2026-07-16 — normalización](docs/ACTUALIZACION-2026-07-16-NORMALIZACION.md)
+- [Actualización 2026-07-16 — zoom y validación](docs/ACTUALIZACION-2026-07-16-ZOOM-VALIDACION.md)
 - [Roadmap de entrenamiento y presets](docs/ROADMAP-ENTRENAMIENTO-Y-PRESETS.md)
 
 ## Privacidad de datos

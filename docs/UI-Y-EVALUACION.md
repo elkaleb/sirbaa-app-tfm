@@ -183,6 +183,8 @@ Interpretación esperada:
 
 La app no usa nombres biológicos fijos para los clusters. Ordena los grupos por temperatura suavizada y toma el grupo de menor temperatura como candidato de lance.
 
+Cuando el modelo propone segmentos que no son lances reales, el analista puede marcarlos manualmente como `no es lance`. Esa marca no borra el segmento, pero puede excluirlo del cruce y de las descargas filtradas.
+
 ### Ventana de suavizado
 
 Suaviza la temperatura antes de clasificar.
@@ -267,6 +269,8 @@ En segmentos:
 - `false_lance_risk`: nivel de alerta estadística para posible falso lance (`sin_alertas`, `bajo`, `medio`, `alto`).
 - `false_lance_flags`: explicación de qué señales dispararon la alerta.
 - `validation_hint`: sugerencia práctica para revisión del analista.
+- `manual_validation`: decisión humana sobre si el segmento es lance real.
+- `include_in_report`: indica si el segmento entra al cruce/reporte filtrado.
 
 ### Sugerencias para identificar posibles falsos lances
 
@@ -309,6 +313,8 @@ La gráfica combina varias capas:
    - La banda azul cubre verticalmente todo el rango visible de temperatura para que el intervalo observado sea fácil de comparar contra los segmentos rojos.
    - El tooltip muestra cuántas lecturas del sensor caen dentro de ese intervalo.
 
+La gráfica permite zoom/pan para revisar tramos específicos de la serie temporal con más detalle.
+
 ### Qué evalúa la gráfica
 
 Permite comparar visualmente:
@@ -338,6 +344,15 @@ Esta tabla ya funciona como cálculo estadístico de temperatura para los lances
 
 Cada columna incluye ayuda contextual en la interfaz para explicar qué mide y para qué sirve durante la validación.
 
+Además, el segmento seleccionado puede marcarse manualmente con una de estas opciones:
+
+- `sin revisar`
+- `sí es lance`
+- `no es lance`
+- `dudoso`
+
+La marca se refleja en `manual_validation`. La columna `include_in_report` indica si el segmento entra al cruce/reporte filtrado. Por defecto, `no es lance` queda fuera del cruce observador ↔ ML y de la descarga filtrada, pero se conserva en la tabla completa para auditoría.
+
 ### Qué evalúa
 
 Cada fila representa un candidato de lance detectado por el termómetro.
@@ -352,7 +367,8 @@ Sirve para revisar:
 - mediana,
 - desviación estándar,
 - delta térmico,
-- rango intercuartílico.
+- rango intercuartílico,
+- validación manual del analista.
 
 ### Medidas útiles para detectar posibles falsos positivos
 
@@ -471,6 +487,8 @@ Si hay detección ML disponible, agrega además:
 - `tfm_vs_ml_mean_delta`: diferencia entre `tfm_promedio` observado y `ml_mean_temp`.
 
 La tabla mostrada en pantalla y el CSV descargable se presentan como **reporte de lances**: conserva las columnas originales del archivo de lances y agrega los valores calculados por sensor/ML. Esto permite que un analista trabaje directamente sobre un solo archivo integrado.
+
+Si un segmento ML se marca manualmente como `no es lance` y está activada la exclusión de falsos lances, ese segmento no se usa para el cruce con lances observados ni para descargas filtradas. La detección original se conserva en la tabla completa de segmentos ML.
 
 Esto ayuda a responder preguntas como:
 

@@ -40,6 +40,10 @@ if "ml_result_version" not in st.session_state:
     st.session_state.ml_result_version = 0
 if "observed_selected_lance_idx" not in st.session_state:
     st.session_state.observed_selected_lance_idx = 0
+if "ml_segment_validation" not in st.session_state:
+    st.session_state.ml_segment_validation = {}
+if "exclude_rejected_ml_segments" not in st.session_state:
+    st.session_state.exclude_rejected_ml_segments = True
 
 LANCE_EXPECTED_COLS = ["clave_viaje", "clave_lance", "fecha", "hr_inical", "hr_fincal", "hr_inicob", "hr_fincob", "Hora_1", "Hora_2", "Hora_3", "Hora_4"]
 LANCE_REQUIRED_ID_COLS = ["clave_lance"]
@@ -125,6 +129,8 @@ COLUMN_HELP = {
     "ml_false_lance_flags": "Razones estadísticas por las que el segmento ML asociado podría ser falso lance o mala delimitación.",
     "ml_validation_hint": "Sugerencia de validación para el segmento ML asociado.",
     "tfm_vs_ml_mean_delta": "Diferencia entre TFM observada y promedio ML; ayuda a revisar discrepancias.",
+    "manual_validation": "Validación humana del segmento ML: sin revisar, sí es lance, no es lance o dudoso.",
+    "include_in_report": "Indica si el segmento ML se usará en cruces, métricas y descargas filtradas.",
 }
 
 
@@ -144,6 +150,44 @@ def _build_lance_report(lances_ts: pd.DataFrame, result: pd.DataFrame) -> pd.Dat
     computed = result.reset_index(drop=True).copy()
     computed = computed[[c for c in computed.columns if c not in original.columns]]
     return pd.concat([original, computed], axis=1)
+
+
+VALIDATION_OPTIONS = ["sin revisar", "sí es lance", "no es lance", "dudoso"]
+
+
+def _segment_validation_key(segment_id) -> str:
+    return str(segment_id)
+
+
+def _get_segment_validation(segment_id) -> str:
+    value = st.session_state.ml_segment_validation.get(_segment_validation_key(segment_id), "sin revisar")
+    return value if value in VALIDATION_OPTIONS else "sin revisar"
+
+
+def _set_segment_validation(segment_id, value: str) -> None:
+    if value not in VALIDATION_OPTIONS:
+        value = "sin revisar"
+    st.session_state.ml_segment_validation[_segment_validation_key(segment_id)] = value
+
+
+def _apply_manual_segment_validation(segments: pd.DataFrame) -> pd.DataFrame:
+    """Attach human validation and inclusion flags to ML segments."""
+    if segments is None or segments.empty:
+        return segments
+    out = segments.copy()
+    out["manual_validation"] = out["segment_id"].apply(_get_segment_validation)
+    out["include_in_report"] = out["manual_validation"] != "no es lance"
+    return out
+
+
+def _filter_ml_segments_for_report(segments: pd.DataFrame | None) -> pd.DataFrame | None:
+    """Optionally exclude manually rejected ML segments from comparisons/downloads."""
+    if segments is None or segments.empty:
+        return segments
+    annotated = _apply_manual_segment_validation(segments)
+    if st.session_state.exclude_rejected_ml_segments and "include_in_report" in annotated.columns:
+        return annotated[annotated["include_in_report"]].copy()
+    return annotated
 
 
 def _show_methodology_note() -> None:
@@ -518,6 +562,8 @@ def _add_ml_overlap_to_observed_result(result: pd.DataFrame, ml_segments: pd.Dat
         best = {
             "ml_segment_id": pd.NA,
             "ml_segment_label": pd.NA,
+            "ml_manual_validation": pd.NA,
+            "ml_include_in_report": pd.NA,
             "ml_overlap_min": pd.NA,
             "ml_overlap_ratio_observed": pd.NA,
             "ml_start_ts": pd.NA,
@@ -563,6 +609,8 @@ def _add_ml_overlap_to_observed_result(result: pd.DataFrame, ml_segments: pd.Dat
         if best_seg is not None:
             best["ml_segment_id"] = best_seg.get("segment_id")
             best["ml_segment_label"] = best_seg.get("segment_label")
+            best["ml_manual_validation"] = best_seg.get("manual_validation", "sin revisar")
+            best["ml_include_in_report"] = best_seg.get("include_in_report", True)
             best["ml_overlap_min"] = best_overlap_min
             best["ml_overlap_ratio_observed"] = best_overlap_min / obs_duration_min if obs_duration_min else pd.NA
             best["ml_start_ts"] = best_seg.get("start_ts")
@@ -808,7 +856,8 @@ if sensor_file:
 if st.session_state.ml_analysis:
     ml_result = st.session_state.ml_analysis
     ml_points = ml_result.points
-    ml_segments = ml_result.segments
+    ml_segments_raw = ml_result.segments
+    ml_segments = _apply_manual_segment_validation(ml_segments_raw)
 
     st.subheader("Lances detectados desde termómetro")
     if ml_segments.empty:
@@ -825,6 +874,11 @@ if st.session_state.ml_analysis:
             "Superponer lances del observador",
             value=bool(lances_file),
             disabled=not bool(lances_file),
+        )
+        st.session_state.exclude_rejected_ml_segments = st.checkbox(
+            "Excluir segmentos marcados como `no es lance` del cruce y descargas filtradas",
+            value=st.session_state.exclude_rejected_ml_segments,
+            help="No borra segmentos; solo evita que los falsos lances afecten el reporte comparativo y la descarga filtrada.",
         )
 
         base_line = (
@@ -924,11 +978,13 @@ if st.session_state.ml_analysis:
 
         chart = alt.layer(*chart_layers).properties(height=300)
         chart_placeholder = st.empty()
-        st.caption("Rojo = segmentos detectados por ML. Azul = lances del observador (si se activan).")
+        st.caption("Rojo = segmentos detectados por ML. Azul = lances del observador (si se activan). Puedes hacer zoom/pan en la gráfica con scroll/arrastre.")
 
         preferred_segment_cols = [
             "segment_label",
             "segment_id",
+            "manual_validation",
+            "include_in_report",
             "false_lance_risk",
             "false_lance_flags",
             "validation_hint",
@@ -971,6 +1027,20 @@ if st.session_state.ml_analysis:
         if segments_view and segments_view.selection.rows:
             st.session_state.ml_selected_segment_id = ml_segments.iloc[segments_view.selection.rows[0]]["segment_id"]
 
+        selected_segment_id = st.session_state.ml_selected_segment_id
+        validation_current = _get_segment_validation(selected_segment_id)
+        validation_choice = st.radio(
+            "Validación manual del segmento ML seleccionado",
+            VALIDATION_OPTIONS,
+            index=VALIDATION_OPTIONS.index(validation_current),
+            horizontal=True,
+            help="Marca si el segmento detectado por ML corresponde a un lance real. Esta marca se usará para filtrar el cruce y servirá como base para entrenamiento posterior.",
+            key=f"manual_validation_radio_{st.session_state.ml_result_version}_{selected_segment_id}",
+        )
+        if validation_choice != validation_current:
+            _set_segment_validation(selected_segment_id, validation_choice)
+            st.rerun()
+
         detected_for_chart = ml_segments.copy()
         detected_for_chart["selected"] = detected_for_chart["segment_id"] == st.session_state.ml_selected_segment_id
         detected_rects = (
@@ -998,7 +1068,7 @@ if st.session_state.ml_analysis:
             )
             .add_params(segment_selector)
         )
-        chart = alt.layer(base_line, detected_rects, *chart_layers[2:]).properties(height=300)
+        chart = alt.layer(base_line, detected_rects, *chart_layers[2:]).properties(height=300).interactive(bind_y=False)
         chart_event = chart_placeholder.altair_chart(
             chart,
             use_container_width=True,
@@ -1047,6 +1117,14 @@ if st.session_state.ml_analysis:
             file_name="lances_detectados_ml.csv",
             mime="text/csv",
         )
+        filtered_ml_segments = _filter_ml_segments_for_report(ml_segments)
+        if filtered_ml_segments is not None and len(filtered_ml_segments) != len(ml_segments):
+            st.download_button(
+                "Descargar segmentos ML filtrados CSV",
+                data=filtered_ml_segments.to_csv(index=False).encode("utf-8"),
+                file_name="lances_detectados_ml_filtrados.csv",
+                mime="text/csv",
+            )
 
 if lances_file and sensor_file:
     st.subheader("Comparación observador ↔ ML y TFM observado")
@@ -1061,7 +1139,7 @@ if lances_file and sensor_file:
     )
     sensor_prepared = prepare_sensor_readings(sensor, time_col, temp_col)
     result = match_sensor_to_lances(lances_ts, sensor_prepared)
-    ml_segments_for_compare = st.session_state.ml_analysis.segments if st.session_state.ml_analysis else None
+    ml_segments_for_compare = _filter_ml_segments_for_report(st.session_state.ml_analysis.segments) if st.session_state.ml_analysis else None
     result = _add_ml_overlap_to_observed_result(result, ml_segments_for_compare)
     st.session_state.analysis = {
         "lances_ts": lances_ts,
