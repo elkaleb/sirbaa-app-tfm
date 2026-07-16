@@ -1,0 +1,24 @@
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.streamlit/
+
+# Datos y salidas locales
+/data/raw/*
+/data/processed/*
+/data/presets/*.json
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/presets/.gitkeep
+
+# Archivos cargados/exportados
+*.csv
+*.xlsx
+*.xls
+*.parquet
+*.sqlite
+*.db
+
+# Permitir documentación CSV solo si se agrega explícitamente en docs/examples
+!docs/**/*.csv

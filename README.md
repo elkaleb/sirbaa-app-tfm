@@ -11,11 +11,13 @@ La app está pensada como herramienta de apoyo para auditoría: no reemplaza el 
 
 ## Funcionalidades
 
-- Carga de archivo de lances en CSV.
+- Carga de archivo de lances en CSV/XLSX.
 - Carga de sensores en CSV/XLSX.
 - Detección automática de encabezado y separador CSV.
+- Normalización explícita de nombres de columnas, fechas y horas antes de comparar lances vs sensores.
+- Conversión controlada de horas decimales cuando el archivo lo requiere (`10.9833` → `10:59`).
 - Limpieza de columnas técnicas del logger.
-- Cálculo de TFM y estadísticos por lance observado.
+- Cálculo de TFM y estadísticos por lance observado usando intervalo configurable (`hr_fincal` → `hr_inicob` por defecto; `Hora_2` → `Hora_3` en formato alterno).
 - Detección de lances candidatos desde temperatura con K-Means.
 - Superposición visual de lances observados vs segmentos ML.
 - Sugerencias explicables para revisar posibles falsos lances.
@@ -29,6 +31,7 @@ streamlit_app.py                  # App principal
 src/sirbaa_pipeline/time_match.py # Lectura, limpieza y cruce temporal
 src/sirbaa_pipeline/lance_ml.py   # Detección ML y métricas de segmentos
 docs/UI-Y-EVALUACION.md          # Guía de uso y metodología
+docs/ACTUALIZACION-2026-07-16-NORMALIZACION.md
 docs/ROADMAP-ENTRENAMIENTO-Y-PRESETS.md
 requirements.txt
 ```
@@ -81,6 +84,7 @@ Referencias base:
 ## Documentación
 
 - [UI y evaluación](docs/UI-Y-EVALUACION.md)
+- [Actualización 2026-07-16 — normalización](docs/ACTUALIZACION-2026-07-16-NORMALIZACION.md)
 - [Roadmap de entrenamiento y presets](docs/ROADMAP-ENTRENAMIENTO-Y-PRESETS.md)
 
 ## Privacidad de datos

@@ -8,7 +8,8 @@ La app tiene dos caminos de análisis que se complementan:
 
 1. **Cruce observador ↔ sensor**
    - Usa el archivo de lances capturado por el observador.
-   - Convierte cada lance en un intervalo de tiempo.
+   - Convierte cada lance en un intervalo de evaluación configurable.
+   - Por metodología SIRBAA, el intervalo recomendado es `hr_fincal` → `hr_inicob` (o `Hora_2` → `Hora_3`).
    - Busca las lecturas del sensor que caen dentro de ese intervalo.
    - Calcula TFM como promedio de temperatura dentro del lance.
 
@@ -47,20 +48,21 @@ Interpretación práctica: un segmento corto, con pocas lecturas, bajo contraste
 
 La parte superior tiene dos cargadores:
 
-- **Archivo de lances (CSV)**
+- **Archivo de lances (CSV/XLSX)**
 - **Archivo de sensores (CSV/XLSX)**
 
 ### Qué evalúa
 
 Para lances:
 
-- Detecta automáticamente si el CSV trae una leyenda o filas antes del encabezado real.
-- Busca columnas esperadas:
-  - `clave_viaje`
-  - `clave_lance`
-  - `fecha`
-  - `hr_inical`
-  - `hr_fincal`
+- Lee CSV o Excel (`.xlsx`/`.xls`).
+- Detecta automáticamente si el CSV o Excel trae una leyenda o filas antes del encabezado real.
+- En CSV detecta automáticamente el separador más probable: coma, punto y coma, tabulador o barra vertical.
+- Busca columnas útiles del archivo de lances, incluyendo identificador, fecha y horas.
+- Normaliza variantes comunes de nombres de columna, por ejemplo `clave lance` → `clave_lance`, `clave viaje` → `clave_viaje` o `hr fincal` → `hr_fincal`.
+- La columna mínima requerida para depurar filas vacías es `clave_lance`, pero puede venir escrita con espacios o mayúsculas.
+- Normaliza fechas y horas antes de comparar contra sensores. Soporta fechas como texto (`16/07/2026`, `2026-07-16`), fechas de Excel y horas en formatos `HH:MM`, `HH.MM`, hora decimal numérica (`10.9833` ≈ `10:59`) o fracción de día Excel.
+- El intervalo de evaluación se selecciona en la UI. Recomendado por SIRBAA: `hr_fincal` → `hr_inicob`; en archivos alternos: `Hora_2` → `Hora_3`.
 - Elimina filas sin `clave_lance`, porque no representan un lance usable.
 - Oculta columnas completamente vacías para limpiar la vista.
 
@@ -69,6 +71,7 @@ Para sensores:
 - Lee CSV o Excel.
 - En CSV detecta automáticamente el separador más probable: coma, punto y coma, tabulador o barra vertical. Esto permite leer exportaciones como `N.°;Fecha Tiempo;Temp...` sin que queden en una sola columna.
 - Detecta encabezado si hay filas iniciales no útiles.
+- Normaliza la columna de tiempo antes del análisis. Soporta texto con fecha/hora, fechas nativas de Excel y seriales numéricos de Excel.
 - Oculta columnas vacías.
 - Oculta columnas técnicas del logger con una regla general: columnas sin nombre, casi vacías/`None`, contadores secuenciales y columnas de estado/evento. También reconoce ejemplos comunes como `N.°`, `Host conectado`, `Parado` y `Final de archivo`, pero no depende solo de esos nombres.
 - Muestra una vista previa de las primeras 20 filas para validar que el archivo se leyó correctamente. El análisis usa todas las filas cargadas, no solo la vista previa.
@@ -81,7 +84,59 @@ Para sensores:
 
 ---
 
-## 2.2 Selección de columnas del sensor
+## 2.2 Normalización de fechas y horas
+
+Después de cargar el archivo de lances, la app muestra una etapa explícita de normalización antes de calcular TFM o cruzar contra sensores.
+
+La decisión de diseño es importante: la app no debe intentar adivinar todos los formatos posibles de forma silenciosa. Primero se transforman las columnas necesarias de manera visible, y luego el resto del flujo trabaja con la tabla **Lances normalizados**.
+
+### Transformaciones actuales
+
+**Fecha**
+
+- Normaliza la columna de fecha a `YYYY-MM-DD`.
+- Sirve cuando el archivo trae fechas como texto (`28/01/2021`), ISO (`2021-01-28`) o fecha nativa de Excel.
+
+**Horas decimales**
+
+- Convierte columnas de hora decimal a `HH:MM`.
+- Ejemplos:
+  - `7.5` → `07:30`
+  - `7.6` → `07:36`
+  - `10.9833` → `10:59`
+  - `22.6667` → `22:40`
+
+La app puede sugerir columnas candidatas, especialmente cuando detecta minutos imposibles si se interpretaran como `HH.MM`, pero el usuario decide qué columnas transformar.
+
+### Flujo recomendado
+
+1. Revisar la columna de fecha sugerida.
+2. Activar solo las columnas de hora que realmente estén en formato decimal.
+3. Revisar la vista previa de la normalización.
+4. Confirmar que la tabla **Lances normalizados** muestre fechas y horas esperadas.
+5. Pasar a seleccionar el intervalo TFM.
+
+### Por qué existe esta etapa
+
+En algunos archivos, columnas como `Hora_2` o `Hora_3` vienen como número decimal:
+
+```text
+10.9833
+22.6667
+```
+
+Eso no significa `10:98` ni `22:66`; significa hora decimal:
+
+```text
+10.9833 ≈ 10:59
+22.6667 ≈ 22:40
+```
+
+Al convertirlo antes del cálculo, el resto de la app puede seguir usando el mismo flujo de intervalos sin meter reglas ocultas en cada función.
+
+---
+
+## 2.3 Selección de columnas del sensor
 
 Después de cargar sensores, la app pide:
 
@@ -110,7 +165,7 @@ Luego intenta:
 
 ---
 
-## 2.3 Ajustes ML de detección
+## 2.4 Ajustes ML de detección
 
 Esta sección controla cómo se detectan lances desde la temperatura.
 
@@ -250,7 +305,7 @@ La gráfica combina varias capas:
 3. **Bandas azules opcionales**
    - Lances del archivo del observador.
    - Se activan con `Superponer lances del observador`.
-   - Se dibujan usando `fecha + hr_inical` como inicio y `fecha + hr_fincal` como fin.
+   - Se dibujan usando las columnas seleccionadas en **Intervalo de evaluación TFM**. Por defecto: `fecha + hr_fincal` como inicio y `fecha + hr_inicob` como fin; o `Hora_2` → `Hora_3` si ese formato existe.
    - La banda azul cubre verticalmente todo el rango visible de temperatura para que el intervalo observado sea fácil de comparar contra los segmentos rojos.
    - El tooltip muestra cuántas lecturas del sensor caen dentro de ese intervalo.
 
@@ -376,16 +431,17 @@ La sección se calcula automáticamente cuando están cargados ambos archivos; y
 
 Para cada lance:
 
-1. Combina `fecha + hr_inical` para crear `lance_inicio_ts`.
-2. Combina `fecha + hr_fincal` para crear `lance_fin_ts`.
-3. Si la hora final es menor que la inicial, asume cruce de medianoche y suma un día.
-4. Busca lecturas del sensor donde:
+1. Usa la columna de fecha seleccionada.
+2. Combina fecha + columna de inicio seleccionada para crear `lance_inicio_ts`. Recomendado: `hr_fincal` o `Hora_2`.
+3. Combina fecha + columna de fin seleccionada para crear `lance_fin_ts`. Recomendado: `hr_inicob` o `Hora_3`.
+4. Si la hora final es menor que la inicial, asume cruce de medianoche y suma un día.
+5. Busca lecturas del sensor donde:
 
 ```text
 lance_inicio_ts <= reading_ts <= lance_fin_ts
 ```
 
-5. Calcula:
+6. Calcula:
 
 - `tfm_promedio`
 - `tfm_mediana`

@@ -7,6 +7,48 @@ from pathlib import Path
 import pandas as pd
 
 
+EXCEL_DATE_MIN = 20_000
+EXCEL_DATE_MAX = 80_000
+
+
+def normalize_datetime_series(values: pd.Series, *, dayfirst: bool = True) -> pd.Series:
+    """Parse dates/timestamps from mixed CSV/Excel inputs consistently.
+
+    Handles common SIRBAA field-file cases:
+    - normal datetime objects from Excel,
+    - text dates like `16/07/2026`, `2026-07-16`, or date+time strings,
+    - Excel serial dates/times when a column was read as numeric.
+    """
+    series = pd.Series(values).copy()
+
+    numeric = pd.to_numeric(series, errors="coerce")
+    numeric_nonnull = numeric.dropna()
+    looks_like_excel_serial = (
+        not numeric_nonnull.empty
+        and float(numeric_nonnull.median()) >= EXCEL_DATE_MIN
+        and float(numeric_nonnull.median()) <= EXCEL_DATE_MAX
+    )
+
+    if looks_like_excel_serial:
+        parsed = pd.to_datetime(numeric, unit="D", origin="1899-12-30", errors="coerce")
+    else:
+        parsed = pd.to_datetime(series, errors="coerce", dayfirst=dayfirst, format="mixed")
+
+    # Retry failed text rows with the opposite day/month convention. This keeps
+    # ISO dates stable while rescuing files that mix locale formats.
+    missing = parsed.isna() & series.notna() & (series.astype("string").str.strip() != "")
+    if missing.any():
+        retry = pd.to_datetime(series[missing], errors="coerce", dayfirst=not dayfirst, format="mixed")
+        parsed.loc[missing] = retry
+
+    return parsed
+
+
+def normalize_date_series(values: pd.Series, *, dayfirst: bool = True) -> pd.Series:
+    """Parse date values and strip any time component to midnight."""
+    return normalize_datetime_series(values, dayfirst=dayfirst).dt.normalize()
+
+
 def parse_clock_value(value) -> pd.Timestamp:
     """Parse values like 7.46, 11.08, 14:40 or 7:46 into a timestamp-less time.
 
@@ -26,6 +68,27 @@ def parse_clock_value(value) -> pd.Timestamp:
             return pd.Timestamp(year=2000, month=1, day=1, hour=parsed.hour, minute=parsed.minute, second=parsed.second)
         return parsed
 
+    try:
+        num = float(text)
+    except Exception:
+        num = None
+
+    # Excel time-only values can arrive as fractions of a day, e.g. 0.5 = 12:00.
+    # Handle this before HH.MM parsing so `0.5` is not mistaken for 00:05.
+    if num is not None and 0 <= num < 1:
+        total_seconds = round(num * 24 * 60 * 60)
+        hh = total_seconds // 3600
+        mm = (total_seconds % 3600) // 60
+        ss = total_seconds % 60
+        if 0 <= hh <= 23 and 0 <= mm <= 59 and 0 <= ss <= 59:
+            return pd.Timestamp(year=2000, month=1, day=1, hour=hh, minute=mm, second=ss)
+
+    # Native Excel/Pandas datetime values: keep only the clock component.
+    if isinstance(value, (pd.Timestamp,)):
+        if pd.isna(value):
+            return pd.NaT
+        return pd.Timestamp(year=2000, month=1, day=1, hour=value.hour, minute=value.minute, second=value.second)
+
     # Values from the field often arrive as HH.MM (minutes after the dot)
     m = re.fullmatch(r"(\d{1,2})\.(\d{1,2})", text)
     if m:
@@ -35,10 +98,14 @@ def parse_clock_value(value) -> pd.Timestamp:
             return pd.Timestamp(year=2000, month=1, day=1, hour=hh, minute=mm)
 
     # Fallback: try to interpret as numeric HH.MM and convert the decimal part to minutes.
-    try:
-        num = float(text)
-    except Exception:
+    if num is None:
         return pd.NaT
+
+    # Excel datetime serial in a time column: extract its time-of-day.
+    if EXCEL_DATE_MIN <= num <= EXCEL_DATE_MAX:
+        parsed = pd.to_datetime(num, unit="D", origin="1899-12-30", errors="coerce")
+        if pd.notna(parsed):
+            return pd.Timestamp(year=2000, month=1, day=1, hour=parsed.hour, minute=parsed.minute, second=parsed.second)
 
     hh = int(num)
     mm = round((num - hh) * 100)
@@ -168,19 +235,38 @@ def drop_empty_columns(df: pd.DataFrame, preserve_columns: list[str] | tuple[str
     return df[kept].copy(), removed
 
 
-def build_lance_timestamps(df: pd.DataFrame) -> pd.DataFrame:
+def build_lance_timestamps(
+    df: pd.DataFrame,
+    date_col: str = "fecha",
+    start_col: str = "hr_fincal",
+    end_col: str = "hr_inicob",
+) -> pd.DataFrame:
+    """Build lance evaluation intervals from configurable date/start/end columns.
+
+    The recommended SIRBAA interval for TFM evaluation is from final calado
+    (`hr_fincal`, net reaches bottom) to inicio cobrado (`hr_inicob`, net starts
+    being lifted). Columns can be changed from the app for files using aliases
+    such as `Hora_2` and `Hora_3`.
+    """
     out = df.copy()
-    out["fecha"] = pd.to_datetime(out["fecha"], dayfirst=True, errors="coerce").dt.normalize()
-    start_times = out["hr_inical"].apply(parse_clock_value)
-    end_times = out["hr_fincal"].apply(parse_clock_value)
-    out["lance_inicio_ts"] = out["fecha"] + (start_times - pd.Timestamp(year=2000, month=1, day=1))
-    out["lance_fin_ts"] = out["fecha"] + (end_times - pd.Timestamp(year=2000, month=1, day=1))
+    out["fecha_base_ts"] = pd.to_datetime(out[date_col], dayfirst=True, errors="coerce").dt.normalize()
+    start_times = out[start_col].apply(parse_clock_value)
+    end_times = out[end_col].apply(parse_clock_value)
+    out["lance_inicio_ts"] = out["fecha_base_ts"] + (start_times - pd.Timestamp(year=2000, month=1, day=1))
+    out["lance_fin_ts"] = out["fecha_base_ts"] + (end_times - pd.Timestamp(year=2000, month=1, day=1))
+    out["lance_intervalo_inicio_col"] = start_col
+    out["lance_intervalo_fin_col"] = end_col
     out = out.sort_values(["lance_inicio_ts", "lance_fin_ts"], na_position="last").reset_index(drop=True)
     return out
 
 
-def parse_lance_timestamps(df: pd.DataFrame) -> pd.DataFrame:
-    return build_lance_timestamps(df)
+def parse_lance_timestamps(
+    df: pd.DataFrame,
+    date_col: str = "fecha",
+    start_col: str = "hr_fincal",
+    end_col: str = "hr_inicob",
+) -> pd.DataFrame:
+    return build_lance_timestamps(df, date_col=date_col, start_col=start_col, end_col=end_col)
 
 
 def prepare_sensor_readings(df: pd.DataFrame, time_col: str, temp_col: str) -> pd.DataFrame:

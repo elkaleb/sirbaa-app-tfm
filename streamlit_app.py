@@ -19,8 +19,8 @@ from sirbaa_pipeline import (  # noqa: E402
     drop_rows_missing_column,
     detect_lance_segments_ml,
     match_sensor_to_lances,
+    normalize_date_series,
     prepare_sensor_readings,
-    read_csv_with_header_detection,
     sensor_readings_within_lance,
 )
 
@@ -41,7 +41,8 @@ if "ml_result_version" not in st.session_state:
 if "observed_selected_lance_idx" not in st.session_state:
     st.session_state.observed_selected_lance_idx = 0
 
-LANCE_EXPECTED_COLS = ["clave_viaje", "clave_lance", "fecha", "hr_inical", "hr_fincal"]
+LANCE_EXPECTED_COLS = ["clave_viaje", "clave_lance", "fecha", "hr_inical", "hr_fincal", "hr_inicob", "hr_fincob", "Hora_1", "Hora_2", "Hora_3", "Hora_4"]
+LANCE_REQUIRED_ID_COLS = ["clave_lance"]
 TIME_AXIS = alt.Axis(format="%d %b\n%H:%M", title="Fecha y hora")
 APP_DIR = Path(__file__).resolve().parent
 PRESETS_DIR = APP_DIR / "data" / "presets"
@@ -241,8 +242,67 @@ def _load_sensor_file(path: Path) -> pd.DataFrame:
     return pd.read_excel(path)
 
 
+def _detect_excel_header_row(path: Path, expected_columns: list[str] | tuple[str, ...] | None = None, max_rows: int = 20) -> int:
+    """Return the zero-based row index of the Excel header.
+
+    This mirrors the CSV header detection used for field files that include a
+    title/legend row before the real table header.
+    """
+    preview = pd.read_excel(path, header=None, nrows=max_rows)
+    expected = {_normalize_column_name(col).replace(" ", "") for col in (expected_columns or []) if str(col).strip()}
+
+    for row_idx, row in preview.iterrows():
+        values = [str(cell).strip() for cell in row.tolist() if pd.notna(cell) and str(cell).strip()]
+        if not values:
+            continue
+
+        normalized = {_normalize_column_name(cell).replace(" ", "") for cell in values}
+        if expected:
+            overlap = len(normalized & expected)
+            if overlap >= max(1, min(2, len(expected) // 4)):
+                return int(row_idx)
+        elif len(values) >= 3 and any(any(ch.isalpha() for ch in cell) for cell in values):
+            return int(row_idx)
+
+    return 0
+
+
+def _load_lances_file(path: Path) -> tuple[pd.DataFrame, int, str]:
+    """Load lances from CSV or Excel and return df, header row, and format note."""
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        delimiter = detect_csv_delimiter(path)
+        header_row = detect_csv_header_row(path, expected_columns=LANCE_EXPECTED_COLS, delimiter=delimiter)
+        delimiter_label = {",": "coma (,)", ";": "punto y coma (;)", "\t": "tabulador", "|": "barra vertical (|)"}.get(delimiter, delimiter)
+        lances = pd.read_csv(path, header=header_row, delimiter=delimiter)
+        return lances, header_row, f"CSV; separador detectado: {delimiter_label}"
+
+    if suffix in {".xlsx", ".xls"}:
+        header_row = _detect_excel_header_row(path, expected_columns=LANCE_EXPECTED_COLS)
+        lances = pd.read_excel(path, header=header_row)
+        return lances, header_row, "Excel"
+
+    raise ValueError(f"Formato de lances no soportado: {suffix or 'sin extensión'}")
+
+
 def _normalize_for_select(values):
     return [str(v) for v in values if str(v).strip()]
+
+
+def _find_column(columns, candidates: list[str], fallback_index: int = 0) -> str | None:
+    if not columns:
+        return None
+    normalized_map = {_normalize_column_name(column): column for column in columns}
+    for candidate in candidates:
+        normalized = _normalize_column_name(candidate)
+        if normalized in normalized_map:
+            return normalized_map[normalized]
+    for candidate in candidates:
+        normalized = _normalize_column_name(candidate)
+        for column in columns:
+            if normalized and normalized in _normalize_column_name(column):
+                return column
+    return columns[min(fallback_index, len(columns) - 1)]
 
 
 def _normalize_column_name(value) -> str:
@@ -259,6 +319,136 @@ def _normalize_column_name(value) -> str:
     for old, new in replacements.items():
         text = text.replace(old, new)
     return " ".join(text.split())
+
+
+def _column_match_key(value) -> str:
+    """Normalize a column name for tolerant matching.
+
+    Examples that should match the same concept: `clave_lance`, `clave lance`,
+    `Clave Lance`, `clave-lance`.
+    """
+    return "".join(ch for ch in _normalize_column_name(value) if ch.isalnum())
+
+
+def _canonicalize_lance_columns(lances: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, str]]:
+    """Rename common lances columns to the canonical names used internally."""
+    out = lances.copy()
+    rename_map: dict[str, str] = {}
+    existing_keys = {_column_match_key(column): column for column in out.columns}
+
+    for canonical in LANCE_EXPECTED_COLS:
+        canonical_key = _column_match_key(canonical)
+        source = existing_keys.get(canonical_key)
+        if source is not None and source != canonical and canonical not in out.columns:
+            rename_map[source] = canonical
+
+    if rename_map:
+        out = out.rename(columns=rename_map)
+    return out, {str(old): str(new) for old, new in rename_map.items()}
+
+
+def _looks_like_decimal_hour_column(series: pd.Series) -> bool:
+    """Detect columns that likely store hours as decimals, not HH.MM text.
+
+    Example: `10.9833` means 10 + 0.9833 hours ≈ 10:59. If interpreted as
+    HH.MM it would become impossible minutes (`10:98`). This function only
+    proposes a default; the user controls the normalization in the UI.
+    """
+    numeric = pd.to_numeric(series, errors="coerce").dropna()
+    if numeric.empty:
+        return False
+    numeric = numeric[(numeric >= 0) & (numeric < 24)]
+    if numeric.empty:
+        return False
+
+    fractions = (numeric - numeric.astype(int)).abs()
+    impossible_hhmm_minutes = (fractions * 100).round(4) >= 60
+    many_decimal_places = series.astype("string").str.extract(r"\.(\d+)", expand=False).str.len().fillna(0).astype(int) > 2
+    return bool(impossible_hhmm_minutes.any() or many_decimal_places.any())
+
+
+def _decimal_hour_to_hhmm(value):
+    """Convert a decimal-hour value to HH:MM; leave blanks/invalid values empty."""
+    if pd.isna(value):
+        return pd.NA
+    try:
+        num = float(str(value).strip())
+    except Exception:
+        return value
+    if not (0 <= num < 24):
+        return value
+    hh = int(num)
+    total_seconds = round((num - hh) * 60 * 60)
+    mm = total_seconds // 60
+    if mm == 60:
+        hh += 1
+        mm = 0
+    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+        return value
+    return f"{hh:02d}:{mm:02d}"
+
+
+def _normalize_date_column_for_processing(series: pd.Series) -> pd.Series:
+    """Normalize a date column to ISO date strings for downstream processing."""
+    normalized = normalize_date_series(series, dayfirst=True)
+    return normalized.dt.strftime("%Y-%m-%d").where(normalized.notna(), pd.NA)
+
+
+def _show_lance_normalization_controls(lances: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    """UI-controlled preprocessing for lances before the existing analysis flow."""
+    out = lances.copy()
+    messages: list[str] = []
+    columns = _normalize_for_select(out.columns.tolist())
+    if not columns:
+        return out, messages
+
+    st.subheader("Normalización de fechas y horas")
+    st.caption("Este paso prepara el archivo antes del cálculo. Después, el resto de la app trabaja con estas columnas normalizadas.")
+
+    date_default = _find_column(columns, ["fecha", "date"], fallback_index=0)
+    hour_candidates = [column for column in columns if _column_match_key(column).startswith("hora") or str(column).lower().startswith("hr")]
+    suggested_decimal_hours = [column for column in hour_candidates if _looks_like_decimal_hour_column(out[column])]
+
+    with st.expander("Configurar normalización", expanded=bool(suggested_decimal_hours)):
+        has_probable_date_column = date_default is not None and any(token in _column_match_key(date_default) for token in ["fecha", "date"])
+        normalize_date = st.checkbox(
+            "Normalizar columna de fecha a formato YYYY-MM-DD",
+            value=has_probable_date_column,
+            help="Útil cuando la fecha viene como texto, Excel o con hora incluida.",
+        )
+        date_col_for_normalization = st.selectbox(
+            "Columna de fecha a normalizar",
+            columns,
+            index=columns.index(date_default) if date_default in columns else 0,
+            disabled=not normalize_date,
+        )
+
+        decimal_hour_cols = st.multiselect(
+            "Columnas de hora en formato decimal a convertir a HH:MM",
+            hour_candidates,
+            default=suggested_decimal_hours,
+            help="Usar para valores como 7.5 = 07:30 o 10.9833 ≈ 10:59. No activar en columnas que ya estén en HH.MM manual.",
+        )
+
+        if normalize_date and date_col_for_normalization:
+            before = out[date_col_for_normalization].copy()
+            out[date_col_for_normalization] = _normalize_date_column_for_processing(out[date_col_for_normalization])
+            changed = int((before.astype("string") != out[date_col_for_normalization].astype("string")).fillna(False).sum())
+            messages.append(f"Fecha normalizada en `{date_col_for_normalization}` ({changed} valores transformados).")
+
+        for column in decimal_hour_cols:
+            before = out[column].copy()
+            out[column] = out[column].apply(_decimal_hour_to_hhmm)
+            changed = int((before.astype("string") != out[column].astype("string")).fillna(False).sum())
+            messages.append(f"Hora decimal normalizada en `{column}` ({changed} valores transformados).")
+
+        if messages:
+            preview_cols = [c for c in [date_col_for_normalization, *decimal_hour_cols] if c in out.columns]
+            st.dataframe(out[preview_cols].head(10), use_container_width=True, hide_index=True)
+        else:
+            st.caption("No se aplicaron transformaciones de normalización.")
+
+    return out, messages
 
 
 def _is_probable_time_or_temp_column(column) -> bool:
@@ -401,29 +591,66 @@ def _add_ml_overlap_to_observed_result(result: pd.DataFrame, ml_segments: pd.Dat
 col_left, col_right = st.columns(2)
 
 with col_left:
-    lances_file = st.file_uploader("Archivo de lances (CSV)", type=["csv"])
+    lances_file = st.file_uploader("Archivo de lances (CSV/XLSX)", type=["csv", "xlsx", "xls"])
 with col_right:
     sensor_file = st.file_uploader("Archivo de sensores (CSV/XLSX)", type=["csv", "xlsx", "xls"])
 
 if lances_file:
     lances_path = _save_upload(lances_file)
-    header_row = detect_csv_header_row(lances_path, expected_columns=LANCE_EXPECTED_COLS)
-    st.success(f"Encabezado de lances detectado en fila {header_row + 1}.")
-    lances = read_csv_with_header_detection(lances_path, expected_columns=LANCE_EXPECTED_COLS)
+    lances, header_row, lances_format_note = _load_lances_file(lances_path)
+    st.success(f"Encabezado de lances detectado en fila {header_row + 1}. Formato: {lances_format_note}.")
+    lances, renamed_lance_columns = _canonicalize_lance_columns(lances)
     lances, removed_blank_lance_rows = drop_rows_missing_column(lances, "clave_lance")
     lances, removed_empty_columns = drop_empty_columns(lances, preserve_columns=LANCE_EXPECTED_COLS)
 
-    st.subheader("Lances")
-    st.dataframe(lances.head(20), use_container_width=True)
-
-    missing = [c for c in LANCE_EXPECTED_COLS if c not in lances.columns]
+    missing = [c for c in LANCE_REQUIRED_ID_COLS if c not in lances.columns]
     if missing:
-        st.error(f"Faltan columnas esperadas en lances: {', '.join(missing)}")
+        st.error(f"Faltan columnas mínimas en lances: {', '.join(missing)}")
         st.stop()
+    lances, normalization_messages = _show_lance_normalization_controls(lances)
+
+    st.subheader("Lances normalizados")
+    st.dataframe(lances.head(20), use_container_width=True)
+    if renamed_lance_columns:
+        st.info(
+            "Se normalizaron nombres de columnas de lances: "
+            + ", ".join(f"`{old}` → `{new}`" for old, new in renamed_lance_columns.items())
+        )
+    for message in normalization_messages:
+        st.info(message)
     if removed_blank_lance_rows:
         st.warning(f"Se eliminaron {removed_blank_lance_rows} filas sin `clave_lance`.")
     if removed_empty_columns:
         st.info(f"Se ocultaron columnas vacías: {', '.join(removed_empty_columns)}")
+
+    lance_cols = _normalize_for_select(lances.columns.tolist())
+    date_default = _find_column(lance_cols, ["fecha", "date"], fallback_index=0)
+    start_default = _find_column(lance_cols, ["hr_fincal", "Hora_2"], fallback_index=0)
+    end_default = _find_column(lance_cols, ["hr_inicob", "Hora_3"], fallback_index=min(1, len(lance_cols) - 1))
+
+    st.subheader("Intervalo de evaluación TFM")
+    st.caption("Por metodología SIRBAA, el intervalo recomendado es final del calado → inicio del cobrado: `hr_fincal` → `hr_inicob` (o `Hora_2` → `Hora_3`).")
+    i1, i2, i3 = st.columns(3)
+    with i1:
+        lance_date_col = st.selectbox(
+            "Columna de fecha",
+            lance_cols,
+            index=lance_cols.index(date_default) if date_default in lance_cols else 0,
+        )
+    with i2:
+        lance_start_col = st.selectbox(
+            "Inicio del intervalo a evaluar",
+            lance_cols,
+            index=lance_cols.index(start_default) if start_default in lance_cols else 0,
+            help="Recomendado: `hr_fincal` o `Hora_2` = final del calado, cuando la red llega al fondo.",
+        )
+    with i3:
+        lance_end_col = st.selectbox(
+            "Fin del intervalo a evaluar",
+            lance_cols,
+            index=lance_cols.index(end_default) if end_default in lance_cols else min(1, len(lance_cols) - 1),
+            help="Recomendado: `hr_inicob` o `Hora_3` = inicio del cobrado, cuando la red empieza a levantarse del fondo.",
+        )
 
 if sensor_file:
     sensor_path = _save_upload(sensor_file)
@@ -646,7 +873,12 @@ if st.session_state.ml_analysis:
         chart_layers = [base_line, detected_rects]
 
         if show_observer and "lances" in locals():
-            observer_ts = build_lance_timestamps(lances)
+            observer_ts = build_lance_timestamps(
+                lances,
+                date_col=lance_date_col,
+                start_col=lance_start_col,
+                end_col=lance_end_col,
+            )
             chart_min_temp = float(ml_points["temp_c"].min()) if not ml_points.empty else 0.0
             chart_max_temp = float(ml_points["temp_c"].max()) if not ml_points.empty else 1.0
             observer_rows = []
@@ -821,7 +1053,12 @@ if lances_file and sensor_file:
     st.caption(
         "Esta sección usa los lances del observador, calcula su TFM con el sensor y, si hay detección ML, los cruza contra los segmentos rojos de la gráfica."
     )
-    lances_ts = build_lance_timestamps(lances)
+    lances_ts = build_lance_timestamps(
+        lances,
+        date_col=lance_date_col,
+        start_col=lance_start_col,
+        end_col=lance_end_col,
+    )
     sensor_prepared = prepare_sensor_readings(sensor, time_col, temp_col)
     result = match_sensor_to_lances(lances_ts, sensor_prepared)
     ml_segments_for_compare = st.session_state.ml_analysis.segments if st.session_state.ml_analysis else None
