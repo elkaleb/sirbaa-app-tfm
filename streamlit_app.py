@@ -287,23 +287,45 @@ def _save_upload(uploaded_file) -> Path:
     return Path(tmp.name)
 
 
-def _load_sensor_file(path: Path) -> pd.DataFrame:
+def _excel_sheet_names(path: Path) -> list[str]:
+    """Return sheet names for an Excel file."""
+    return list(pd.ExcelFile(path).sheet_names)
+
+
+def _select_excel_sheet(path: Path, label: str, key: str) -> str | int:
+    """Show a sheet selector for Excel files and return the selected sheet."""
+    names = _excel_sheet_names(path)
+    if not names:
+        return 0
+    if len(names) == 1:
+        st.caption(f"Hoja de {label}: `{names[0]}`")
+        return names[0]
+    return st.selectbox(
+        f"Hoja de Excel para {label}",
+        names,
+        index=0,
+        key=key,
+        help="Si el archivo tiene varias pestañas, selecciona cuál usar para este análisis.",
+    )
+
+
+def _load_sensor_file(path: Path, sheet_name: str | int = 0) -> pd.DataFrame:
     if path.suffix.lower() == ".csv":
         delimiter = detect_csv_delimiter(path)
         header_row = detect_csv_header_row(path, delimiter=delimiter)
         delimiter_label = {",": "coma (,)", ";": "punto y coma (;)", "\t": "tabulador", "|": "barra vertical (|)"}.get(delimiter, delimiter)
         st.info(f"Header detectado en fila {header_row + 1} para el archivo de sensores CSV. Separador detectado: {delimiter_label}.")
         return pd.read_csv(path, header=header_row, delimiter=delimiter)
-    return pd.read_excel(path)
+    return pd.read_excel(path, sheet_name=sheet_name)
 
 
-def _detect_excel_header_row(path: Path, expected_columns: list[str] | tuple[str, ...] | None = None, max_rows: int = 20) -> int:
+def _detect_excel_header_row(path: Path, expected_columns: list[str] | tuple[str, ...] | None = None, max_rows: int = 20, sheet_name: str | int = 0) -> int:
     """Return the zero-based row index of the Excel header.
 
     This mirrors the CSV header detection used for field files that include a
     title/legend row before the real table header.
     """
-    preview = pd.read_excel(path, header=None, nrows=max_rows)
+    preview = pd.read_excel(path, header=None, nrows=max_rows, sheet_name=sheet_name)
     expected = {_normalize_column_name(col).replace(" ", "") for col in (expected_columns or []) if str(col).strip()}
 
     for row_idx, row in preview.iterrows():
@@ -322,7 +344,7 @@ def _detect_excel_header_row(path: Path, expected_columns: list[str] | tuple[str
     return 0
 
 
-def _load_lances_file(path: Path) -> tuple[pd.DataFrame, int, str]:
+def _load_lances_file(path: Path, sheet_name: str | int = 0) -> tuple[pd.DataFrame, int, str]:
     """Load lances from CSV or Excel and return df, header row, and format note."""
     suffix = path.suffix.lower()
     if suffix == ".csv":
@@ -333,9 +355,9 @@ def _load_lances_file(path: Path) -> tuple[pd.DataFrame, int, str]:
         return lances, header_row, f"CSV; separador detectado: {delimiter_label}"
 
     if suffix in {".xlsx", ".xls"}:
-        header_row = _detect_excel_header_row(path, expected_columns=LANCE_EXPECTED_COLS)
-        lances = pd.read_excel(path, header=header_row)
-        return lances, header_row, "Excel"
+        header_row = _detect_excel_header_row(path, expected_columns=LANCE_EXPECTED_COLS, sheet_name=sheet_name)
+        lances = pd.read_excel(path, header=header_row, sheet_name=sheet_name)
+        return lances, header_row, f"Excel; hoja: {sheet_name}"
 
     raise ValueError(f"Formato de lances no soportado: {suffix or 'sin extensión'}")
 
@@ -656,7 +678,10 @@ with col_right:
 
 if lances_file:
     lances_path = _save_upload(lances_file)
-    lances, header_row, lances_format_note = _load_lances_file(lances_path)
+    lances_sheet_name = 0
+    if lances_path.suffix.lower() in {".xlsx", ".xls"}:
+        lances_sheet_name = _select_excel_sheet(lances_path, "lances", f"lances_sheet_{lances_file.name}")
+    lances, header_row, lances_format_note = _load_lances_file(lances_path, sheet_name=lances_sheet_name)
     st.success(f"Encabezado de lances detectado en fila {header_row + 1}. Formato: {lances_format_note}.")
     lances, renamed_lance_columns = _canonicalize_lance_columns(lances)
     lances, removed_blank_lance_rows = drop_rows_missing_column(lances, "clave_lance")
@@ -713,7 +738,10 @@ if lances_file:
 
 if sensor_file:
     sensor_path = _save_upload(sensor_file)
-    sensor = _load_sensor_file(sensor_path)
+    sensor_sheet_name = 0
+    if sensor_path.suffix.lower() in {".xlsx", ".xls"}:
+        sensor_sheet_name = _select_excel_sheet(sensor_path, "sensores", f"sensor_sheet_{sensor_file.name}")
+    sensor = _load_sensor_file(sensor_path, sheet_name=sensor_sheet_name)
     sensor, removed_noise_sensor_columns = _drop_sensor_noise_columns(sensor)
     sensor, removed_empty_sensor_columns = drop_empty_columns(sensor)
 
@@ -1227,21 +1255,18 @@ if st.session_state.analysis:
         st.dataframe(window_display, use_container_width=True, column_config=_column_config_for(window_display.columns))
 
     csv_bytes = lance_report.to_csv(index=False).encode("utf-8")
-    download_name_col, download_button_col = st.columns([2, 1])
-    with download_name_col:
-        report_filename_input = st.text_input(
-            "Nombre del archivo de reporte",
-            value="reporte_lances_tfm_ml.csv",
-            help="Puedes escribirlo con o sin .csv. La app limpiará caracteres problemáticos para crear un nombre de archivo seguro.",
-        )
-    with download_button_col:
-        st.download_button(
-            "Descargar reporte de lances CSV",
-            data=csv_bytes,
-            file_name=_clean_csv_filename(report_filename_input, "reporte_lances_tfm_ml.csv"),
-            mime="text/csv",
-            use_container_width=True,
-        )
+    report_filename_input = st.text_input(
+        "Nombre del archivo de reporte",
+        value="reporte_lances_tfm_ml.csv",
+        help="Puedes escribirlo con o sin .csv. La app limpiará caracteres problemáticos para crear un nombre de archivo seguro.",
+    )
+    st.download_button(
+        "Descargar reporte de lances CSV",
+        data=csv_bytes,
+        file_name=_clean_csv_filename(report_filename_input, "reporte_lances_tfm_ml.csv"),
+        mime="text/csv",
+        use_container_width=True,
+    )
 
 st.divider()
 st.caption("RedesyRaices/Sirbaa - 2026")
