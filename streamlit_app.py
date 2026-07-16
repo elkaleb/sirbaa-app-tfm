@@ -152,6 +152,17 @@ def _build_lance_report(lances_ts: pd.DataFrame, result: pd.DataFrame) -> pd.Dat
     return pd.concat([original, computed], axis=1)
 
 
+def _clean_csv_filename(value: str | None, default: str) -> str:
+    """Return a safe CSV filename from a user-provided label."""
+    raw = str(value or "").strip() or default
+    if raw.lower().endswith(".csv"):
+        raw = raw[:-4]
+    cleaned = "".join(char if char.isalnum() or char in "-_ ." else "_" for char in raw).strip(" ._")
+    if not cleaned:
+        cleaned = default[:-4] if default.lower().endswith(".csv") else default
+    return f"{cleaned}.csv"
+
+
 VALIDATION_OPTIONS = ["sin revisar", "sí es lance", "no es lance", "dudoso"]
 
 
@@ -1216,12 +1227,21 @@ if st.session_state.analysis:
         st.dataframe(window_display, use_container_width=True, column_config=_column_config_for(window_display.columns))
 
     csv_bytes = lance_report.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "Descargar reporte de lances CSV",
-        data=csv_bytes,
-        file_name="reporte_lances_tfm_ml.csv",
-        mime="text/csv",
-    )
+    download_name_col, download_button_col = st.columns([2, 1])
+    with download_name_col:
+        report_filename_input = st.text_input(
+            "Nombre del archivo de reporte",
+            value="reporte_lances_tfm_ml.csv",
+            help="Puedes escribirlo con o sin .csv. La app limpiará caracteres problemáticos para crear un nombre de archivo seguro.",
+        )
+    with download_button_col:
+        st.download_button(
+            "Descargar reporte de lances CSV",
+            data=csv_bytes,
+            file_name=_clean_csv_filename(report_filename_input, "reporte_lances_tfm_ml.csv"),
+            mime="text/csv",
+            use_container_width=True,
+        )
 
 st.divider()
 st.caption("RedesyRaices/Sirbaa - 2026")
