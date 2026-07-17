@@ -87,7 +87,7 @@ Referencias base:
 
 ## Documentación
 
-- [UI y evaluación](docs/UI-Y-EVALUACION.md)
+- [UI y evaluación](docs/UI-Y-EVALUACION.md) — incluye diagrama Mermaid del flujo de trabajo
 - [Actualización 2026-07-16 — normalización](docs/ACTUALIZACION-2026-07-16-NORMALIZACION.md)
 - [Actualización 2026-07-16 — zoom y validación](docs/ACTUALIZACION-2026-07-16-ZOOM-VALIDACION.md)
 - [Actualización 2026-07-16 — hojas Excel y descarga](docs/ACTUALIZACION-2026-07-16-EXCEL-DESCARGA.md)

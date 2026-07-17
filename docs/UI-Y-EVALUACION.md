@@ -42,6 +42,59 @@ Interpretación práctica: un segmento corto, con pocas lecturas, bajo contraste
 
 ---
 
+## 1.2 Diagrama general del flujo de trabajo
+
+```mermaid
+flowchart TD
+    A[Inicio: abrir app Streamlit] --> B{Cargar archivos}
+    B --> C[Lances CSV/XLSX]
+    B --> D[Sensores CSV/XLSX]
+
+    C --> C1{¿Excel multihoja?}
+    C1 -- Sí --> C2[Seleccionar hoja de lances]
+    C1 -- No --> C3[Leer archivo de lances]
+    C2 --> C3
+    C3 --> C4[Detectar encabezado y separador CSV]
+    C4 --> C5[Normalizar nombres de columnas]
+    C5 --> C6[Normalización explícita de fechas y horas]
+    C6 --> C7[Seleccionar intervalo TFM: hr_fincal→hr_inicob u Hora_2→Hora_3]
+
+    D --> D1{¿Excel multihoja?}
+    D1 -- Sí --> D2[Seleccionar hoja de sensores]
+    D1 -- No --> D3[Leer archivo de sensores]
+    D2 --> D3
+    D3 --> D4[Detectar encabezado/separador y limpiar columnas técnicas]
+    D4 --> D5[Seleccionar columna de tiempo y temperatura]
+    D5 --> D6[Preparar lecturas: reading_ts y temp_c]
+
+    C7 --> E[Cruce observador ↔ sensor por intervalo]
+    D6 --> E
+    E --> F[Calcular TFM y estadísticos por lance observado]
+
+    D6 --> G[Detección ML desde temperatura]
+    G --> G1[Ajustar clusters, suavizado, unión y mínimos]
+    G1 --> G2[Generar segmentos candidatos]
+    G2 --> G3[Calcular métricas y contraste térmico]
+    G3 --> G4[Validación manual: sí/no/dudoso/sin revisar]
+
+    F --> H[Comparación visual]
+    G4 --> H
+    H --> H1[Gráfica con zoom/pan: sensor + bandas ML + lances observados]
+    H --> H2[Tablas vinculadas: comparativo, segmentos y auditoría de lecturas]
+
+    H2 --> I[Reporte integrado]
+    G4 --> I
+    I --> I1[Aplicar exclusión opcional de falsos lances]
+    I1 --> I2[Descargar CSV con nombre personalizado]
+
+    G1 --> J[Guardar/cargar presets JSON de parámetros ML]
+    J --> G1
+```
+
+Este flujo resume la lógica completa: primero se normalizan entradas de forma explícita, luego se calculan TFM observados y segmentos ML por separado, y al final ambos caminos se comparan visualmente y se integran en el reporte descargable.
+
+---
+
 ## 2. Partes principales de la UI
 
 ## 2.1 Carga de archivos
