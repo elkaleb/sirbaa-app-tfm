@@ -11,8 +11,8 @@ La app está pensada como herramienta de apoyo para auditoría: no reemplaza el 
 
 ## Funcionalidades
 
-- Carga de archivo de lances en CSV/XLSX.
-- Carga de sensores en CSV/XLSX.
+- Carga de archivo de lances en CSV/XLSX, con selección de hoja si el Excel tiene varias pestañas.
+- Carga de sensores en CSV/XLSX, con selección de hoja si el Excel tiene varias pestañas.
 - Detección automática de encabezado y separador CSV.
 - Normalización explícita de nombres de columnas, fechas y horas antes de comparar lances vs sensores.
 - Conversión controlada de horas decimales cuando el archivo lo requiere (`10.9833` → `10:59`).
@@ -23,7 +23,7 @@ La app está pensada como herramienta de apoyo para auditoría: no reemplaza el 
 - Validación manual de segmentos ML (`sí es lance`, `no es lance`, `dudoso`).
 - Superposición visual de lances observados vs segmentos ML.
 - Sugerencias explicables para revisar posibles falsos lances.
-- Reporte integrado descargable: `reporte_lances_tfm_ml.csv`.
+- Reporte integrado descargable con nombre personalizable: `reporte_lances_tfm_ml.csv`.
 - Presets JSON de parámetros ML para repetir análisis.
 
 ## Estructura
@@ -35,6 +35,7 @@ src/sirbaa_pipeline/lance_ml.py   # Detección ML y métricas de segmentos
 docs/UI-Y-EVALUACION.md          # Guía de uso y metodología
 docs/ACTUALIZACION-2026-07-16-NORMALIZACION.md
 docs/ACTUALIZACION-2026-07-16-ZOOM-VALIDACION.md
+docs/ACTUALIZACION-2026-07-16-EXCEL-DESCARGA.md
 docs/ROADMAP-ENTRENAMIENTO-Y-PRESETS.md
 requirements.txt
 ```
@@ -89,6 +90,7 @@ Referencias base:
 - [UI y evaluación](docs/UI-Y-EVALUACION.md)
 - [Actualización 2026-07-16 — normalización](docs/ACTUALIZACION-2026-07-16-NORMALIZACION.md)
 - [Actualización 2026-07-16 — zoom y validación](docs/ACTUALIZACION-2026-07-16-ZOOM-VALIDACION.md)
+- [Actualización 2026-07-16 — hojas Excel y descarga](docs/ACTUALIZACION-2026-07-16-EXCEL-DESCARGA.md)
 - [Roadmap de entrenamiento y presets](docs/ROADMAP-ENTRENAMIENTO-Y-PRESETS.md)
 
 ## Privacidad de datos

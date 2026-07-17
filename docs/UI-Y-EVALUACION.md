@@ -56,6 +56,7 @@ La parte superior tiene dos cargadores:
 Para lances:
 
 - Lee CSV o Excel (`.xlsx`/`.xls`).
+- Si el Excel tiene varias hojas, permite seleccionar la hoja que contiene los datos antes de detectar encabezado.
 - Detecta automáticamente si el CSV o Excel trae una leyenda o filas antes del encabezado real.
 - En CSV detecta automáticamente el separador más probable: coma, punto y coma, tabulador o barra vertical.
 - Busca columnas útiles del archivo de lances, incluyendo identificador, fecha y horas.
@@ -69,6 +70,7 @@ Para lances:
 Para sensores:
 
 - Lee CSV o Excel.
+- Si el Excel tiene varias hojas, permite seleccionar la hoja que contiene los datos antes de leer la tabla.
 - En CSV detecta automáticamente el separador más probable: coma, punto y coma, tabulador o barra vertical. Esto permite leer exportaciones como `N.°;Fecha Tiempo;Temp...` sin que queden en una sola columna.
 - Detecta encabezado si hay filas iniciales no útiles.
 - Normaliza la columna de tiempo antes del análisis. Soporta texto con fecha/hora, fechas nativas de Excel y seriales numéricos de Excel.
@@ -78,6 +80,7 @@ Para sensores:
 
 ### Qué debe revisar el usuario
 
+- Que la hoja seleccionada sea la correcta cuando el archivo sea Excel multihoja.
 - Que el encabezado detectado sea correcto.
 - Que la vista previa muestre columnas reales, no leyendas.
 - Que las filas eliminadas tengan sentido.
@@ -487,6 +490,8 @@ Si hay detección ML disponible, agrega además:
 - `tfm_vs_ml_mean_delta`: diferencia entre `tfm_promedio` observado y `ml_mean_temp`.
 
 La tabla mostrada en pantalla y el CSV descargable se presentan como **reporte de lances**: conserva las columnas originales del archivo de lances y agrega los valores calculados por sensor/ML. Esto permite que un analista trabaje directamente sobre un solo archivo integrado.
+
+El nombre del archivo descargable puede personalizarse desde la interfaz. Se puede escribir con o sin `.csv`; la app limpia caracteres problemáticos para generar un nombre de archivo seguro.
 
 Si un segmento ML se marca manualmente como `no es lance` y está activada la exclusión de falsos lances, ese segmento no se usa para el cruce con lances observados ni para descargas filtradas. La detección original se conserva en la tabla completa de segmentos ML.
 
